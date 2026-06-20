@@ -3,6 +3,7 @@ rag/analyzer.py — Chain-of-Thought violation detection via LLM.
 """
 import json
 import logging
+import os
 import time
 from typing import Dict, Any, List, Optional
 from django.conf import settings
@@ -69,6 +70,42 @@ RETRIEVED REGULATORY POLICY CONTEXT:
 
 Now perform the full compliance audit following the Chain-of-Thought steps in your system instructions.
 Output ONLY valid JSON."""
+
+QA_SYSTEM_PROMPT = """You are MedGuard, an expert healthcare compliance QA assistant.
+Use ONLY the provided hospital document segments below to answer the user's question.
+If the document does not contain enough information to answer, say so clearly.
+Do NOT hallucinate or invent information.
+Format the answer in a standard point-wise style:
+- Start with one short lead sentence only when helpful.
+- Put each distinct fact, solution, step, or recommendation on its own bullet line.
+- Use concise bullets beginning with "- ".
+- Avoid long paragraphs.
+Respond ONLY with valid JSON in the following schema:
+{
+  "answer": "string",
+  "sources": ["string"],
+  "source_chunks": ["string"]
+}
+"""
+
+
+def build_qa_prompt(document_name: str, query: str, document_context: str) -> str:
+    return f"""HOSPITAL DOCUMENT: {document_name}
+=====================================
+{document_context}
+=====================================
+
+USER QUESTION:
+{query}
+
+INSTRUCTIONS:
+- Answer only using the text from the document segments above.
+- If the answer cannot be derived from the document, respond truthfully that the information is not available.
+- Keep responses brief, factual, and grounded in the document.
+- Format the answer as standard bullet points using "- " for each point.
+- Do not return one long paragraph.
+- Return ONLY valid JSON with keys: answer, sources, source_chunks.
+"""
 
 
 def call_gemini(prompt: str, system: str) -> Dict[str, Any]:
@@ -159,6 +196,112 @@ def run_compliance_analysis(
 
     logger.info(f"LLM analysis complete: score={result.get('compliance_score')}, violations={len(result.get('violations', []))}, time={elapsed_ms}ms")
     return result
+
+
+def run_document_qa(
+    document: Any,
+    document_chunks: List[Dict],
+    query: str,
+) -> Dict[str, Any]:
+    """Run QA over uploaded document chunks and return a grounded answer."""
+    from rag.retriever import build_context_string
+
+    start_time = time.time()
+    doc_context = build_context_string(document_chunks, max_chars=8000)
+    prompt = build_qa_prompt(document.name, query, doc_context)
+
+    if settings.DEBUG and os.getenv('FORCE_REAL_LLM', 'False') != 'True':
+        result = local_qa_result(document.name, query, document_chunks)
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        result["processing_time_ms"] = elapsed_ms
+        result["llm_model"] = "local-dev-mode"
+        result["embedding_model"] = settings.EMBEDDING_MODEL
+        result["chunks_retrieved"] = len(document_chunks)
+        result["document_name"] = document.name
+        logger.info(f"QA complete for {document.name}, time={elapsed_ms}ms")
+        return result
+
+    logger.info(f"Calling LLM QA ({settings.LLM_MODEL}) for document: {document.name}")
+    try:
+        result = call_llm(prompt, system=QA_SYSTEM_PROMPT)
+    except Exception as exc:
+        logger.error(f"QA LLM call failed; falling back to local document QA: {exc}")
+        result = local_qa_result(document.name, query, document_chunks)
+        result["llm_error"] = str(exc)
+
+    elapsed_ms = int((time.time() - start_time) * 1000)
+    result["processing_time_ms"] = elapsed_ms
+    result["llm_model"] = settings.LLM_MODEL
+    result["embedding_model"] = settings.EMBEDDING_MODEL
+    result["chunks_retrieved"] = len(document_chunks)
+    result["document_name"] = document.name
+
+    logger.info(f"QA complete for {document.name}, time={elapsed_ms}ms")
+    return result
+
+
+def _format_pointwise_answer(document_name: str, source_text: str, query: str) -> str:
+    """Create a readable bullet-point answer for local development mode."""
+    if not source_text.strip():
+        return f"I could not find enough text in '{document_name}' to answer: {query}"
+
+    import re
+
+    cleaned = re.sub(r'\s+', ' ', source_text).strip()
+    sentences = [
+        sentence.strip(" -")
+        for sentence in re.split(r'(?<=[.!?])\s+', cleaned)
+        if sentence.strip(" -")
+    ]
+    if not sentences:
+        sentences = [cleaned]
+
+    bullets = []
+    seen = set()
+    for sentence in sentences:
+        normalized = sentence.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        bullets.append(f"- {sentence}")
+        if len(bullets) >= 8:
+            break
+
+    return f"Based on '{document_name}', the relevant points are:\n" + "\n".join(bullets)
+
+
+def local_qa_result(document_name: str, query: str, document_chunks: List[Dict]) -> Dict[str, Any]:
+    """Simple grounded QA response for local development without a remote LLM."""
+    source_chunks = [chunk["text"] for chunk in document_chunks[:3] if chunk.get("text")]
+    source_text = " ".join(source_chunks)
+    answer = _format_pointwise_answer(document_name, source_text, query)
+    return {
+        "answer": answer,
+        "sources": [document_name],
+        "source_chunks": source_chunks,
+    }
+
+
+def mock_qa_result(document_name: str, query: str) -> Dict[str, Any]:
+    """
+    Mock QA result for development/testing when no LLM key is configured.
+    """
+    return {
+        "answer": (
+            f"Based on '{document_name}', the relevant points are:\n"
+            "- The document appears to cover infection control procedures and staff hygiene.\n"
+            f"- For your query '{query}', review the uploaded PDF and verify the exact section details.\n"
+            "- This is a mock response because no live LLM response was available."
+        ),
+        "sources": [document_name],
+        "source_chunks": [
+            "Mock chunk: This document describes hospital infection prevention measures, including hand hygiene, PPE use, and environmental cleaning.",
+        ],
+        "processing_time_ms": 0,
+        "llm_model": "mock-dev-mode",
+        "embedding_model": settings.EMBEDDING_MODEL,
+        "chunks_retrieved": len(document_name),
+    }
 
 
 def mock_analysis_result(document_name: str) -> Dict[str, Any]:

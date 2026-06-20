@@ -6,6 +6,37 @@ type DocumentsPageProps = {
   setDocuments: Dispatch<SetStateAction<Document[]>>
 }
 
+function mapBackendDocument(data: any): Document {
+  const docType = (data.doc_type || '').toUpperCase()
+  const rawFileUrl = data.file_url || data.file || ''
+  const fileUrl = rawFileUrl && rawFileUrl !== '/media/' && rawFileUrl !== '/media'
+    ? rawFileUrl.startsWith('/media/')
+      ? `http://localhost:8000${rawFileUrl}`
+      : rawFileUrl
+    : ''
+
+  return {
+    id: data.id,
+    name: data.name,
+    doc_type: data.doc_type,
+    type: docType === 'DOCX' ? 'DOCX' : docType === 'TXT' ? 'TXT' : 'PDF',
+    size: data.file_size_display || data.size || `${Math.round((data.file_size || 0) / 1024)} KB`,
+    file_size_display: data.file_size_display,
+    file_url: fileUrl,
+    status: data.status,
+    uploadedAt: data.created_at ? data.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+    chunk_count: data.chunk_count,
+    chunks: data.chunk_count,
+    created_at: data.created_at,
+  }
+}
+
+function getDocumentResults(data: any): any[] {
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.results)) return data.results
+  return []
+}
+
 export default function DocumentsPage({ documents, setDocuments }: DocumentsPageProps) {
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -17,40 +48,85 @@ export default function DocumentsPage({ documents, setDocuments }: DocumentsPage
     setTimeout(() => setToast(null), 3000)
   }
 
-  const handleFiles = (files: FileList) => {
+  const handleFiles = async (files: FileList) => {
     const allowed = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain']
-    const validFiles = Array.from(files).filter(f => allowed.includes(f.type) || f.name.endsWith('.pdf') || f.name.endsWith('.docx'))
+    const validFiles = Array.from(files).filter(f => {
+      const name = f.name.toLowerCase()
+      return allowed.includes(f.type) || name.endsWith('.pdf') || name.endsWith('.docx') || name.endsWith('.txt')
+    })
     if (!validFiles.length) { showToast('Only PDF, DOCX, TXT files are accepted.'); return }
 
     setUploading(true)
-    validFiles.forEach(file => {
+
+    for (const file of validFiles) {
+      const placeholderId = `doc-${Date.now()}-${Math.random().toString(36).slice(2,6)}`
       const ext = file.name.split('.').pop()?.toUpperCase() as Document['type']
-      const newDoc: Document = {
-        id: `doc-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+      const placeholder: Document = {
+        id: placeholderId,
         name: file.name,
         type: ext || 'PDF',
         size: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
         status: 'processing',
         uploadedAt: new Date().toISOString().split('T')[0],
       }
-      setDocuments(prev => [newDoc, ...prev])
-      // Simulate processing
-      setTimeout(() => {
-        setDocuments(prev => prev.map(d =>
-          d.id === newDoc.id ? { ...d, status: 'indexed', chunks: Math.floor(Math.random() * 120 + 30) } : d
-        ))
-      }, 3000)
-    })
-    setTimeout(() => { setUploading(false); showToast(`${validFiles.length} file(s) queued for indexing`) }, 500)
+      setDocuments(prev => [placeholder, ...prev])
+
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('hospital_name', '')
+      formData.append('department', '')
+      formData.append('notes', '')
+
+      try {
+        const response = await fetch('/api/documents/', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null)
+          showToast(`Upload failed: ${errorData?.error || response.statusText}`)
+          setDocuments(prev => prev.filter(doc => doc.id !== placeholderId))
+          continue
+        }
+
+        const data = await response.json()
+        const savedDoc = mapBackendDocument(data)
+        setDocuments(prev => prev.map(doc => doc.id === placeholderId ? savedDoc : doc))
+        const listResponse = await fetch('/api/documents/')
+        if (listResponse.ok) {
+          const listData = await listResponse.json()
+          setDocuments(getDocumentResults(listData).map(mapBackendDocument))
+        }
+      } catch (error) {
+        console.error('Document upload failed:', error)
+        showToast('Upload failed due to network error.')
+        setDocuments(prev => prev.filter(doc => doc.id !== placeholderId))
+      }
+    }
+
+    setUploading(false)
+    showToast(`${validFiles.length} file(s) queued for indexing`)
   }
 
-  const handleDelete = (id: string) => {
-    setDocuments(prev => prev.filter(d => d.id !== id))
-    showToast('Document removed from index')
+  const handleDelete = async (id: string) => {
+    try {
+      const response = await fetch(`/api/documents/${id}/`, { method: 'DELETE' })
+      if (!response.ok) {
+        showToast('Failed to delete document from backend.')
+        return
+      }
+      setDocuments(prev => prev.filter(d => d.id !== id))
+      showToast('Document removed from index')
+    } catch (error) {
+      console.error('Delete failed:', error)
+      showToast('Failed to delete document due to network error.')
+    }
   }
 
   const statusBadge = (status: Document['status']) => {
-    const map = {
+    const map: Record<Document['status'], { cls: string; label: string }> = {
+      pending: { cls: 'badge-processing', label: 'Pending' },
       processing: { cls: 'badge-processing', label: '⟳ Processing' },
       ready: { cls: 'badge-medium', label: '◎ Ready' },
       indexed: { cls: 'badge-low', label: '✓ Indexed' },
@@ -151,7 +227,11 @@ export default function DocumentsPage({ documents, setDocuments }: DocumentsPage
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 16 }}>{typeIcon(doc.type)}</span>
                     <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {doc.name}
+                      {doc.file_url ? (
+                        <a href={doc.file_url} target="_blank" rel="noreferrer" style={{ color: 'var(--text-primary)' }}>{doc.name}</a>
+                      ) : (
+                        doc.name
+                      )}
                     </span>
                   </div>
                 </td>

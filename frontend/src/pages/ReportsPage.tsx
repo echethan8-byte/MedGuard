@@ -1,10 +1,20 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import ScoreRing from '../components/ScoreRing'
-import { mockReports, mockViolations, ComplianceReport } from '../utils/mockData'
+import { ComplianceReport, Violation } from '../utils/mockData'
 
-export default function ReportsPage() {
-  const [selected, setSelected] = useState<ComplianceReport>(mockReports[0])
+type ReportsPageProps = {
+  reports: ComplianceReport[]
+}
+
+export default function ReportsPage({ reports }: ReportsPageProps) {
+  const [selected, setSelected] = useState<ComplianceReport | null>(null)
   const [expandedViolation, setExpandedViolation] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!selected && reports.length > 0) {
+      setSelected(reports[0])
+    }
+  }, [reports, selected])
 
   const riskBadge = (risk: string) => {
     const map: Record<string, string> = { critical: 'badge-critical', high: 'badge-high', medium: 'badge-medium', low: 'badge-low' }
@@ -12,11 +22,11 @@ export default function ReportsPage() {
   }
 
   const riskOrder = ['critical', 'high', 'medium', 'low']
-  const sortedViolations = [...selected.violations].sort(
+  const sortedViolations = selected ? [...selected.violations].sort(
     (a, b) => riskOrder.indexOf(a.risk) - riskOrder.indexOf(b.risk)
-  )
+  ) : []
 
-  const riskCounts = (violations: typeof selected.violations) => ({
+  const riskCounts = (violations: Violation[]) => ({
     critical: violations.filter(v => v.risk === 'critical').length,
     high: violations.filter(v => v.risk === 'high').length,
     medium: violations.filter(v => v.risk === 'medium').length,
@@ -135,6 +145,19 @@ export default function ReportsPage() {
     downloadHTML(html, `report-${report.id}.html`)
   }
 
+  if (!selected) {
+    return (
+      <div className="fade-in">
+        <div className="page-header">
+          <div className="page-eyebrow">Audit History</div>
+          <div className="page-title">Compliance Reports</div>
+          <div className="page-subtitle">Full audit trail with evidence, citations and corrective actions</div>
+        </div>
+        <div className="card">No reports are available yet.</div>
+      </div>
+    )
+  }
+
   return (
     <div className="fade-in">
       <div className="page-header">
@@ -148,11 +171,11 @@ export default function ReportsPage() {
         {/* Report List */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', padding: '0 4px', marginBottom: 2 }}>
-            {mockReports.length} Reports
+            {reports.length} Reports
           </div>
-          {mockReports.map(report => {
+          {reports.map(report => {
             const counts = riskCounts(report.violations)
-            const isSelected = selected.id === report.id
+            const isSelected = selected?.id === report.id
             return (
               <div
                 key={report.id}

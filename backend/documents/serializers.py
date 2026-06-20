@@ -4,17 +4,26 @@ from core.models import Document
 
 class DocumentSerializer(serializers.ModelSerializer):
     file_size_display = serializers.ReadOnlyField()
+    file_url = serializers.SerializerMethodField()
     uploaded_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
         fields = [
-            'id', 'name', 'doc_type', 'file_size', 'file_size_display',
+            'id', 'name', 'file_url', 'doc_type', 'file_size', 'file_size_display',
             'status', 'chunk_count', 'hospital_name', 'department',
             'notes', 'error_message', 'uploaded_by_name',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'status', 'chunk_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'status', 'chunk_count', 'created_at', 'updated_at', 'file_url']
+
+    def get_file_url(self, obj):
+        if obj.file:
+            try:
+                return obj.file.url
+            except ValueError:
+                return None
+        return None
 
     def get_uploaded_by_name(self, obj):
         if obj.uploaded_by:

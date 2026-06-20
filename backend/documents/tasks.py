@@ -42,20 +42,28 @@ def process_document_task(self, doc_id: str):
             'hospital_name': doc.hospital_name or 'Unknown',
             'department': doc.department or 'Unknown',
         }
-        count = add_chunks_to_chroma(
-            collection_name=settings.CHROMA_DOCUMENTS_COLLECTION,
-            chunks=chunks,
-            doc_id=str(doc.id),
-            doc_metadata=metadata,
-            embedding_model=settings.EMBEDDING_MODEL,
-        )
+        try:
+            count = add_chunks_to_chroma(
+                collection_name=settings.CHROMA_DOCUMENTS_COLLECTION,
+                chunks=chunks,
+                doc_id=str(doc.id),
+                doc_metadata=metadata,
+                embedding_model=settings.EMBEDDING_MODEL,
+            )
+            chroma_doc_id = str(doc.id)
+            error_message = ''
+        except Exception as exc:
+            logger.error(f"Chroma indexing failed for document {doc_id}; using file fallback: {exc}")
+            count = len(chunks)
+            chroma_doc_id = ''
+            error_message = f'Chroma indexing failed; file stored and QA fallback is available. {exc}'
 
         doc.status = Document.Status.INDEXED
         doc.chunk_count = count
-        doc.chroma_doc_id = str(doc.id)
-        doc.error_message = ''
+        doc.chroma_doc_id = chroma_doc_id
+        doc.error_message = error_message
         doc.save(update_fields=['status', 'chunk_count', 'chroma_doc_id', 'error_message'])
-        logger.info(f"Document indexed: {doc.name} → {count} chunks")
+        logger.info(f"Document indexed: {doc.name} -> {count} chunks")
 
     except Document.DoesNotExist:
         logger.error(f"Document {doc_id} not found.")

@@ -1,20 +1,22 @@
 import { useState, useEffect } from 'react'
 import ScoreRing from '../components/ScoreRing'
-import { mockDocuments, mockReports, mockViolations } from '../utils/mockData'
+import { ComplianceReport, Document } from '../utils/mockData'
 import { Page } from '../App'
 
 interface DashboardProps {
   onNavigate: (page: Page) => void
+  documents: Document[]
+  reports: ComplianceReport[]
 }
 
-export default function Dashboard({ onNavigate }: DashboardProps) {
+export default function Dashboard({ onNavigate, documents, reports }: DashboardProps) {
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
 
-  const avgScore = Math.round(mockReports.reduce((s, r) => s + r.score, 0) / mockReports.length)
-  const criticalCount = mockViolations.filter(v => v.risk === 'critical').length
-  const highCount = mockViolations.filter(v => v.risk === 'high').length
-  const readyDocs = mockDocuments.filter(d => d.status === 'indexed' || d.status === 'ready').length
+  const avgScore = reports.length > 0 ? Math.round(reports.reduce((s, r) => s + r.score, 0) / reports.length) : 0
+  const criticalCount = reports.reduce((count, report) => count + report.violations.filter(v => v.risk === 'critical').length, 0)
+  const highCount = reports.reduce((count, report) => count + report.violations.filter(v => v.risk === 'high').length, 0)
+  const readyDocs = documents.filter(d => d.status === 'indexed' || d.status === 'ready').length
 
   const categoryBreakdown = [
     { label: 'Infection Control', value: 42, color: '#EF4444' },
@@ -45,7 +47,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         <div className="stat-card" style={{ '--accent': '#EF4444' } as React.CSSProperties}>
           <div className="stat-label">Critical Violations</div>
           <div className="stat-value" style={{ color: '#EF4444' }}>{criticalCount}</div>
-          <div className="stat-sub">Across {mockReports.length} reports</div>
+          <div className="stat-sub">Across {reports.length} reports</div>
           <div className="stat-trend trend-down">▲ Requires immediate action</div>
         </div>
         <div className="stat-card" style={{ '--accent': '#F59E0B' } as React.CSSProperties}>
@@ -57,7 +59,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         <div className="stat-card" style={{ '--accent': '#3B82F6' } as React.CSSProperties}>
           <div className="stat-label">Indexed Documents</div>
           <div className="stat-value">{readyDocs}</div>
-          <div className="stat-sub">Of {mockDocuments.length} total</div>
+          <div className="stat-sub">Of {documents.length} total</div>
           <div className="stat-trend trend-up">▲ 2 added today</div>
         </div>
         <div className="stat-card" style={{ '--accent': '#10B981' } as React.CSSProperties}>
@@ -103,7 +105,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             <button className="btn btn-ghost btn-sm" onClick={() => onNavigate('reports')}>View all →</button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {mockReports.map(report => (
+            {reports.map(report => (
               <div key={report.id} style={{
                 display: 'flex', alignItems: 'center', gap: 12,
                 padding: '10px 12px', background: 'var(--bg-elevated)',

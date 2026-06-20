@@ -46,3 +46,8 @@ class RunAuditSerializer(serializers.Serializer):
     )
     top_k = serializers.IntegerField(min_value=5, max_value=30, default=20, required=False)
     rerank_k = serializers.IntegerField(min_value=3, max_value=15, default=8, required=False)
+
+
+class QARequestSerializer(serializers.Serializer):
+    query = serializers.CharField()
+    document_id = serializers.UUIDField(required=False, allow_null=True)

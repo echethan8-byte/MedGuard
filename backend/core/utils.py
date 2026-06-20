@@ -4,6 +4,7 @@ Core utilities: text extraction, chunking, embedding, ChromaDB management.
 import re
 import logging
 import hashlib
+import os
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
@@ -150,9 +151,14 @@ def get_embedding_model(model_name: str = 'all-MiniLM-L6-v2'):
     """Lazy-load sentence transformer model (singleton)."""
     global _embedding_model
     if _embedding_model is None:
+        os.environ.setdefault('HF_HUB_OFFLINE', '1')
+        os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
         from sentence_transformers import SentenceTransformer
         logger.info(f"Loading embedding model: {model_name}")
-        _embedding_model = SentenceTransformer(model_name)
+        try:
+            _embedding_model = SentenceTransformer(model_name, local_files_only=True)
+        except TypeError:
+            _embedding_model = SentenceTransformer(model_name)
     return _embedding_model
 
 

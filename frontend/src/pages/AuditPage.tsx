@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import ScoreRing from '../components/ScoreRing'
 import { Document, mockViolations, mockReport } from '../utils/mockData'
 
@@ -49,18 +49,14 @@ export default function AuditPage({ documents }: AuditPageProps) {
   const [expandedViolation, setExpandedViolation] = useState<string | null>(null)
   const termRef = useRef<HTMLDivElement>(null)
 
-  const indexedDocs = documents.filter(d => d.status === 'indexed')
+  const selectableDocs = documents.filter(d => d.status === 'indexed' || d.status === 'ready')
   const selectedDoc = documents.find(d => d.id === selectedDocId)
 
-  const addLines = (lines: string[], type = 'default', delay = 300) => {
-    lines.forEach((line, i) => {
-      setTimeout(() => {
-        setTerminalLines(prev => [...prev, { text: line, type }])
-        if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight
-      }, i * delay)
-    })
-    return lines.length * delay
-  }
+  useEffect(() => {
+    if (!selectedDocId && selectableDocs.length > 0) {
+      setSelectedDocId(selectableDocs[0].id)
+    }
+  }, [selectedDocId, selectableDocs])
 
   const runAudit = async () => {
     if (!selectedDocId) return
@@ -262,8 +258,10 @@ export default function AuditPage({ documents }: AuditPageProps) {
               disabled={stage !== 'idle' && stage !== 'done'}
             >
               <option value="">— Choose indexed document —</option>
-              {indexedDocs.map(d => (
-                <option key={d.id} value={d.id}>{d.name}</option>
+              {documents.map(d => (
+                <option key={d.id} value={d.id} disabled={d.status !== 'indexed' && d.status !== 'ready'}>
+                  {d.name}{d.status !== 'indexed' && d.status !== 'ready' ? ` (${d.status})` : ''}
+                </option>
               ))}
             </select>
           </div>

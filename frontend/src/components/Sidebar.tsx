@@ -10,6 +10,7 @@ const navItems: { id: Page; icon: string; label: string; badge?: string }[] = [
   { id: 'documents', icon: '⬢', label: 'Documents', badge: '3' },
   { id: 'audit', icon: '◈', label: 'Run Audit' },
   { id: 'reports', icon: '◉', label: 'Reports' },
+  { id: 'chat', icon: '💬', label: 'Assistant' },
 ]
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {

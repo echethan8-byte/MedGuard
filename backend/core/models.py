@@ -163,6 +163,7 @@ class AuditLog(models.Model):
         UPLOAD = 'upload', 'Document Upload'
         INDEX = 'index', 'Document Indexed'
         AUDIT = 'audit', 'Compliance Audit Run'
+        QA = 'qa', 'Document QA Query'
         REPORT_DOWNLOAD = 'report_download', 'Report Downloaded'
         DELETE = 'delete', 'Document Deleted'
         LOGIN = 'login', 'User Login'

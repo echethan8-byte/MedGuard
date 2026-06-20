@@ -2,6 +2,7 @@
 rag/views.py — Compliance audit endpoint and report management.
 """
 import logging
+import re
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -11,14 +12,29 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
 from core.models import Document, ComplianceReport, Violation, AuditLog
-from .serializers import ComplianceReportSerializer, RunAuditSerializer
+from .serializers import ComplianceReportSerializer, RunAuditSerializer, QARequestSerializer
 
 logger = logging.getLogger('medguard')
 
 
+def _rank_chunks_for_query(chunks, query, limit):
+    terms = [term for term in re.findall(r'\w+', query.lower()) if len(term) > 2]
+
+    def score(chunk):
+        text = chunk.get('text', '').lower()
+        return sum(text.count(term) for term in terms)
+
+    ranked = sorted(chunks, key=score, reverse=True)
+    return ranked[:limit]
+
+
 class AuditViewSet(viewsets.ReadOnlyModelViewSet):
-    """List and retrieve compliance reports."""
-    permission_classes = [IsAuthenticated]
+    """List and retrieve compliance reports.
+
+    For local development the list endpoint is open (AllowAny) so the
+    frontend can display existing reports without requiring a JWT.
+    """
+    permission_classes = [AllowAny]
     serializer_class = ComplianceReportSerializer
 
     def get_queryset(self):
@@ -153,3 +169,78 @@ class RunAuditView(APIView):
         report.completed_at = timezone.now()
         report.save()
         logger.info(f"Report {report.id} completed with score={report.compliance_score}")
+
+
+class DocumentQAView(APIView):
+    """POST /api/rag/qa/ — Answer questions against an uploaded document."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = QARequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        query = serializer.validated_data['query'].strip()
+        document_id = serializer.validated_data.get('document_id')
+
+        if not query:
+            return Response({'error': 'Query text is required.'}, status=400)
+
+        document = None
+        if document_id:
+            try:
+                document = Document.objects.get(id=document_id)
+            except Document.DoesNotExist:
+                return Response({'error': 'Document not found.'}, status=404)
+        else:
+            document = Document.objects.filter(status=Document.Status.INDEXED).order_by('-created_at').first()
+            if not document:
+                return Response({'error': 'No indexed document available for QA.'}, status=404)
+
+        if document.status != Document.Status.INDEXED:
+            return Response({'error': 'Document is not indexed.'}, status=400)
+
+        from django.conf import settings
+        from core.utils import clean_text, chunk_text, extract_text
+        from rag.retriever import retrieve_document_chunks
+        from rag.analyzer import run_document_qa
+
+        try:
+            document_chunks = retrieve_document_chunks(query, doc_id=str(document.id), k=settings.RAG_TOP_K_RETRIEVE)
+            # If Chroma returns an empty list (document not indexed in Chroma), fallback to file-based chunking
+            if not document_chunks:
+                raise ValueError('No chunks returned from Chroma')
+        except Exception as exc:
+            logger.warning(f"Chroma retrieval missing or failed for doc={document.id}: {exc}; falling back to file chunking")
+            cleaned_text = clean_text(extract_text(document.file.path))
+            chunks = chunk_text(
+                cleaned_text,
+                chunk_size=settings.CHUNK_SIZE,
+                chunk_overlap=settings.CHUNK_OVERLAP,
+            )
+            document_chunks = [
+                {
+                    'text': chunk['text'],
+                    'metadata': {
+                        'source': document.name,
+                        'doc_id': str(document.id),
+                        'chunk_index': chunk['chunk_index'],
+                    },
+                    'score': None,
+                }
+                for chunk in _rank_chunks_for_query(chunks, query, settings.RAG_TOP_K_RETRIEVE)
+            ]
+        # If still no chunks after fallback, inform the caller
+        if not document_chunks:
+            return Response({'error': 'No document chunks found after fallback. Ensure the document file contains readable text.'}, status=400)
+
+        result = run_document_qa(document, document_chunks, query)
+
+        AuditLog.objects.create(
+            user=request.user if request.user.is_authenticated else None,
+            action=AuditLog.Action.QA,
+            description=f'Document QA query for {document.name}',
+            metadata={'document_id': str(document.id), 'query': query},
+            ip_address=request.META.get('REMOTE_ADDR'),
+        )
+
+        return Response(result, status=200)

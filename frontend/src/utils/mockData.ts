@@ -1,11 +1,16 @@
 export interface Document {
   id: string
   name: string
+  doc_type?: string
   type: 'PDF' | 'DOCX' | 'TXT'
-  size: string
-  status: 'processing' | 'ready' | 'error' | 'indexed'
+  size?: string
+  file_size_display?: string
+  file_url?: string
+  status: 'pending' | 'processing' | 'ready' | 'error' | 'indexed'
   uploadedAt: string
+  chunk_count?: number
   chunks?: number
+  created_at?: string
 }
 
 export interface Violation {
